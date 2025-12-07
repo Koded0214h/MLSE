@@ -1,0 +1,6 @@
+id,amount,type,date
+T100,500.50,credit,2024-01-01
+T101,15.99,debit,2024-01-02
+T102,100,credit,2024-01-03
+T103,-50.00,debit,2024-01-04  # INVALID: amount must be > 0
+T104,25.00,transfer,2024-01-05 # INVALID: type must be 'debit' or 'credit'
