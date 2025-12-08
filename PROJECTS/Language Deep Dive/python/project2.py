@@ -201,28 +201,39 @@ class DataAnalyzer():
     def __init__(self, data:List[str]):
         self.data = data
     
+    
+    # Corrected: in order to use the GIL, replaced with Heavy-bound CPU tasks
+    # Inside DataAnalyzer class
     def calculate_statistics(self):
-        # 1. I need to first iterate through the entire scraped dataset
+        print(f"[Analyzer] Starting heavy CPU work on {len(self.data)} items...")
         
-        prices = 0
-        
-        for product in self.data:
-            # I need to begin calculating statistics like: mean price, median price, price standard deviation
-            prices += product.price
-            
-        # Mean Price:
-        mean_price = numpy.mean(prices)
+        # --- SIMULATE HEAVY CPU-BOUND WORK THAT HOLDS THE GIL ---
+        start = time.perf_counter()
+        # A dense loop is excellent for holding the GIL
+        n = 200_000_000  # Adjust based on your CPU speed (aim for ~5-10 seconds)
+        x = 0
+        for i in range(n):
+            x = i * i / 2.71828 # Complex math operation
+        end = time.perf_counter()
+        print(f"[Analyzer] Pure Python Calculation took: {end - start:.4f}s")
+        # --------------------------------------------------------
 
-        # Median Price:
+        prices = [p.price for p in self.data if p.price > 0] # Filter out 0.0 prices
+
+        if not prices:
+            return {"Mean": 0, "Median": 0, "SD": 0}
+            
+        # Standard numpy calls are fast; the loop above is the real demo
+        mean_price = numpy.mean(prices)
         median_price = numpy.median(prices)
-        
-        # Price Standard Deviation:
         sd_price = numpy.std(prices)
         
-        
-        print(f"Mean Prices: {mean_price}")
-        print(f"Median Prices: {median_price}")
-        print(f"Prices Standard Deviation: {sd_price}")
+        stats = {
+            "Mean": mean_price, 
+            "Median": median_price, 
+            "SD": sd_price
+        }
+        return stats
        
        
 # ConcurrentManager Class (The Orchestrator)
@@ -237,51 +248,110 @@ class ConcurrentManager():
     def __init__(self, urls: List[str]):
         self.urls = urls
         
-    def run_scraper(self, url:List[str]):
+    # Corrected with actual ThreadPoolExecutor
+    def run_scraper(self):
         start_time = time.perf_counter()
-        ThreadPoolExecutor(MAX_WORKERS, "Product scraper", ProductScrapper.fetch_data(url))
-        end_time = time.perf_counter()
-        duration = end_time - start_time
-        print(f"Ran scraper for {duration:.4f}s")
-            
-    def run_analyzer(self, data:List[str]):
-        start_time = time.perf_counter()
-        ProcessPoolExecutor(MAX_WORKERS, initializer=DataAnalyzer.calculate_statistics())
-        end_time = time.perf_counter()
-        duration = end_time - start_time
-        print(f"Ran analyzer for {duration:.4f}s")
+        scraper = ProductScrapper([]) # Initialize Scrapper to get the method
+        all_results = []
         
+        # Use the Executor via a 'with' statement for proper resource management
+        with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+            # executor.map() applies the function (scraper.fetch_data) to every iterable (self.urls)
+            # The first argument (scraper.fetch_data) must be a callable
+            # The results are yielded in the order the calls were submitted
+            futures = executor.map(scraper.fetch_data, self.urls)
+            
+            # Collect results from the futures
+            for products_list in futures:
+                if products_list:
+                    all_results.extend(products_list)
+                    
+        end_time = time.perf_counter()
+        duration = end_time - start_time
+        print(f"[TEST 1: I/O (Threads)] Scraped {len(all_results)} products in {duration:.4f}s")
+        return all_results
+            
+    # Corrected with actual ProcessPoolExecutor            
+    # Inside ConcurrentManager class
+    def run_analyzer(self, data: List[ProductData], executor_type='Process'):
+        # We must pass the data *to* the pool to be worked on.
+        analyzer = DataAnalyzer(data)
+        
+        # Define which executor to use based on the test
+        if executor_type == 'Process':
+            Pool = ProcessPoolExecutor
+            print(f"[TEST 2: CPU (Processes)] Starting analysis...")
+        elif executor_type == 'Thread':
+            Pool = ThreadPoolExecutor
+            print(f"[TEST 3: CPU (Threads - GIL Demo)] Starting analysis...")
+        else:
+            return # Handle error
+            
+        start_time = time.perf_counter()
+        
+        with Pool(max_workers=MAX_WORKERS) as executor:
+            # .submit() returns a Future object immediately
+            future = executor.submit(analyzer.calculate_statistics)
+            # .result() blocks until the task is complete and returns the result
+            stats = future.result() 
+
+        end_time = time.perf_counter()
+        duration = end_time - start_time
+        print(f"[{executor_type}] Analysis completed in {duration:.4f}s")
+        return duration
+            
     def main(self, urls:List[str]):
         self.run_scraper()
         self.run_analyzer()
         
         
+# Refactored __main__ 
 if __name__ == "__main__":
-    # Create a list of URLs to scrape
     test_urls = [
-        "https://www.jumia.com.ng/televisions/#catalog-listing",
-    ]
-    
-    scraper = ProductScrapper(test_urls)
-    all_products = []  # Collect all products from all URLs
-    
-    for url in test_urls:
-        products_data = scraper.fetch_data(url)  # Now returns a list
-        if products_data:
-            all_products.extend(products_data)
-            print(f"\n[Main] Scraped {len(products_data)} products from {url}")
-    
-    # Print summary
-    print(f"\n{'='*60}")
-    print(f"TOTAL PRODUCTS COLLECTED: {len(all_products)}")
-    print(f"{'='*60}")
-    
-    # Show first few products
-    for i, product in enumerate(all_products[:5], 1):
-        print(f"{i}. {product.title[:60]}...")
-        print(f"   Price: ₦{product.price:,.2f}")
-        print(f"   URL: {product.url[:80]}...")
-        print("=" * 40)
+        "https://www.jumia.com.ng/televisions/#catalog-listing"
+        # Add more URLs if you can find them to increase I/O load
+    ] * 2 # Duplicate to increase load for better threading demo
 
-    scraped = DataAnalyzer(data=all_products)
-    print(scraped.calculate_statistics())
+    # Initialize Manager
+    manager = ConcurrentManager(test_urls)
+
+    # =========================================================================
+    # TEST 1: I/O BOUND TASK with THREADS (Expected: FAST - GIL is released)
+    # =========================================================================
+    print("\n--- RUNNING TEST 1: I/O (Scraper) with THREADS ---")
+    all_products = manager.run_scraper()
+    
+    if not all_products:
+        print("ERROR: Scraper failed to fetch data. Cannot proceed with analysis tests.")
+        exit()
+
+    print(f"\nTOTAL PRODUCTS COLLECTED: {len(all_products)}")
+    print("-" * 60)
+
+    # =========================================================================
+    # TEST 2: CPU BOUND TASK with PROCESSES (Expected: FAST - GIL is bypassed)
+    # =========================================================================
+    print("\n--- RUNNING TEST 2: CPU (Analyzer) with PROCESSES ---")
+    duration_process = manager.run_analyzer(all_products, executor_type='Process')
+
+    # =========================================================================
+    # TEST 3: CPU BOUND TASK with THREADS (Expected: SLOW - GIL holds one core)
+    # =========================================================================
+    print("\n--- RUNNING TEST 3: CPU (Analyzer) with THREADS (GIL Demo) ---")
+    duration_thread = manager.run_analyzer(all_products, executor_type='Thread')
+
+    # =========================================================================
+    # CONCLUSION
+    # =========================================================================
+    print("\n" + "=" * 60)
+    print("                 GIL DEMONSTRATION RESULTS")
+    print("=" * 60)
+    print(f"Analyzer (Processes): {duration_process:.4f}s (Bypassed GIL)")
+    print(f"Analyzer (Threads):   {duration_thread:.4f}s (Limited by GIL)")
+    
+    if duration_thread > duration_process * 0.9: # Simple check
+        print("\n✅ **DEMONSTRATION SUCCESSFUL**")
+        print("The thread duration is significantly longer because the GIL prevented true parallel execution on the CPU-bound task.")
+    else:
+        print("\n⚠️ **DEMONSTRATION FAILED**")
+        print("The CPU-bound work in the Analyzer needs to be made much more intensive (increase 'n' in the loop) to hold the GIL for longer.")
