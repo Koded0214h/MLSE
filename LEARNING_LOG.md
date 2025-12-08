@@ -20,3 +20,15 @@
     * a command-line tool that performs a health check on a list of URLs by fetching them concurrently
     * Challenge Focus: Limiting concurrency with a Goroutine pool,
     * using channels for job distribution and result collection, and error management (Go's error interface).
+
+#### Projects @ 11:08
+*   I renamed the projects in Lnaguage Deep Dive after their respective languages
+
+*   Project
+*   1. Concurrent Web Scraper and Data Analyzer (Python OOD):
+    ObjectiveDesign and implement a robust, object-oriented Python application to concurrently scrape product titles and prices from a list of URLs and then analyze the collected data. This project must clearly demonstrate and address the limitations imposed by the Python GIL.
+    Phase 1: Object-Oriented Design (OOD): Product Scraper, Data Analyzer, ConcurrentManager
+    Phase 2: GIL Demonstartion & Testing
+
+*   2. Updated the ThreadPoolExecutor and ProcessPoolExecutor to use the I/O Threads
+*   3. Updated the  ConcurrentManager to use heavy-bound CPU tasks and processes instead of just `numpy` functions
